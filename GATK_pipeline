@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+
+# Ensure that an SRA accession is provided
+SRA=${1?Error: No accession given}
+
+# Directory where project files are stored
+PROJECT_DIR="/Users/fred/Documents/Genomics_projects/Project_1"
+
+# Reference genome
+REFERENCE_GENOME="${PROJECT_DIR}/GRCh38.genome.fa"
+
+# Known sites VCF for BQSR (replace with actual known sites VCF path)
+KNOWN_SITES="${PROJECT_DIR}/known_sites.vcf"
+
+# GATK path
+GATK="gatk"  # Adjust if GATK isn't in your PATH (e.g., /path/to/gatk)
+
+# Download the SRA file
+prefetch "$SRA"
+
+# Define the location of the downloaded SRA file
+SRA_FILE="${PROJECT_DIR}/${SRA}.sra"
+
+# Check if the file exists before proceeding
+if [ -f "$SRA_FILE" ]; then
+  # Convert SRA to FASTQ (splitting if paired-end)
+  fastq-dump --split-files --outdir "$PROJECT_DIR" "$SRA_FILE"
+else
+  echo "Error: SRA file not found."
+  exit 1
+fi
+
+# Check if FASTQ files exist before alignment
+FASTQ1="${PROJECT_DIR}/${SRA}_1.fastq"
+FASTQ2="${PROJECT_DIR}/${SRA}_2.fastq"
+
+if [ -f "$FASTQ1" ] && [ -f "$FASTQ2" ]; then
+  # BWA Alignment
+  bwa mem "$REFERENCE_GENOME" "$FASTQ1" "$FASTQ2" > "${PROJECT_DIR}/aligned_reads.sam"
+
+  # Convert SAM to BAM
+  samtools view -Sb "${PROJECT_DIR}/aligned_reads.sam" > "${PROJECT_DIR}/aligned_reads.bam"
+
+  # Sort the BAM file
+  samtools sort "${PROJECT_DIR}/aligned_reads.bam" -o "${PROJECT_DIR}/aligned_reads_sorted.bam"
+
+  # Index the sorted BAM file
+  samtools index "${PROJECT_DIR}/aligned_reads_sorted.bam"
+
+  echo "Alignment, sorting, and indexing completed successfully."
+
+  # Mark Duplicates using GATK MarkDuplicatesSpark
+  $GATK MarkDuplicatesSpark \
+    -I "${PROJECT_DIR}/aligned_reads_sorted.bam" \
+    -O "${PROJECT_DIR}/marked_duplicates.bam" \
+    -M "${PROJECT_DIR}/marked_dup_metrics.txt" \
+    --spark-runner LOCAL
+
+  # Index the marked BAM file
+  samtools index "${PROJECT_DIR}/marked_duplicates.bam"
+
+  echo "Duplicate marking completed successfully."
+
+  # Base Recalibration (BQSR) - Step 1: Generate recalibration table
+  $GATK BaseRecalibrator \
+    -I "${PROJECT_DIR}/marked_duplicates.bam" \
+    -R "$REFERENCE_GENOME" \
+    --known-sites "$KNOWN_SITES" \
+    -O "${PROJECT_DIR}/recal_data.table"
+
+  # Apply BQSR - Step 2: Apply recalibration
+  $GATK ApplyBQSR \
+    -R "$REFERENCE_GENOME" \
+    -I "${PROJECT_DIR}/marked_duplicates.bam" \
+    --bqsr-recal-file "${PROJECT_DIR}/recal_data.table" \
+    -O "${PROJECT_DIR}/final_recalibrated.bam"
+
+  # Index the final recalibrated BAM file
+  samtools index "${PROJECT_DIR}/final_recalibrated.bam"
+
+  echo "Base Quality Score Recalibration completed successfully."
+
+  # HaplotypeCaller for variant discovery
+  $GATK HaplotypeCaller \
+    -R "$REFERENCE_GENOME" \
+    -I "${PROJECT_DIR}/final_recalibrated.bam" \
+    -O "${PROJECT_DIR}/${SRA}_output.g.vcf.gz" \
+    -ERC GVCF
+
+  echo "Variant calling completed successfully."
+
+  # Generate variant statistics
+  bcftools stats "${PROJECT_DIR}/${SRA}_output.g.vcf.gz" > "${PROJECT_DIR}/variant_stats.txt"
+  grep "SN" "${PROJECT_DIR}/variant_stats.txt"
+
+  echo "Variant statistics generated successfully."
+
+else
+  echo "Error: FASTQ files not found."
+  exit 1
+fi
+
