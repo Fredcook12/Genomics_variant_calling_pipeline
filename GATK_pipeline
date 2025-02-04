@@ -3,7 +3,7 @@
 # Ensure that an SRA accession is provided
 SRA=${1?Error: No accession given}
 
-# Directory where project files are stored
+# Directory where files are stored
 PROJECT_DIR="/Users/fred/Documents/Genomics_projects/Project_1"
 
 # Reference genome
