@@ -45,8 +45,3 @@ Replace `SRR019438` with your SRA accession. The script will handle downloading,
 - Variant call file (`SRR019438_output.g.vcf.gz`)
 - Generate variant statistics (`variant_stats.txt`)
 
-## Notes
-
-- Make sure the `GATK` executable path is correctly set in the script if it's not globally accessible.
-- Modify the `PROJECT_DIR` in the script if using a different directory structure.
-
